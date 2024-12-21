@@ -64,19 +64,19 @@ def verify_aspose_syntax(template_content, flattened_fields):
 
     # Define regular expressions for Aspose.Words syntax
     field_pattern = r"<<([a-zA-Z0-9_\.]+)>>"  # Matches <<FieldName>> or <<Parent.FieldName>>
-    if_pattern = r"<<if\s+[^>]+>>.*?<<endif>>"  # Matches <<if condition>>...<<endif>>
-    foreach_pattern = r"<<foreach\s+[^>]+>>.*?<<endforeach>>"  # Matches <<foreach item in collection>>...<<endforeach>>
+    if_pattern = r"<<if\s+[^>]+>>.*?(<<elseif\s+[^>]+>>.*?)*<<else>>.*?<</if>>"  # Matches <<if condition>>...<<elseif condition>>...<<else>>...<</if>>
+    foreach_pattern = r"<<foreach\s+[^>]+>>.*?<</foreach>>"  # Matches <<foreach item in collection>>...<</foreach>>
 
     # Check for unmatched opening and closing tags
     unmatched_if = re.findall(r"<<if\s+[^>]+>>", template_content)
-    unmatched_endif = re.findall(r"<<endif>>", template_content)
+    unmatched_endif = re.findall(r"<</if>>", template_content)
     unmatched_foreach = re.findall(r"<<foreach\s+[^>]+>>", template_content)
-    unmatched_endforeach = re.findall(r"<<endforeach>>", template_content)
+    unmatched_endforeach = re.findall(r"<</foreach>>", template_content)
 
     if len(unmatched_if) != len(unmatched_endif):
-        errors.append("Mismatched <<if>> and <<endif>> tags.")
+        errors.append("Mismatched <<if>> and <</if>> tags.")
     if len(unmatched_foreach) != len(unmatched_endforeach):
-        errors.append("Mismatched <<foreach>> and <<endforeach>> tags.")
+        errors.append("Mismatched <<foreach>> and <</foreach>> tags.")
 
     # Extract all field placeholders
     fields = re.findall(field_pattern, template_content)
