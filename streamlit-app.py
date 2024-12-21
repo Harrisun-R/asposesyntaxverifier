@@ -5,12 +5,12 @@ import streamlit as st
 # Define a function to verify the template syntax
 def verify_template_syntax(template, predefined_json):
     # Define regex patterns for the supported syntax
-    field_pattern = r"<<\\[\\w+\\]>>"  # Matches fields like <<[FieldName]>>
-    var_pattern = r"<<var \\[.*?\\]>>"  # Matches variable definitions like <<var [x = 5]>>
-    foreach_open_pattern = r"<<foreach \\[.*?\\]>>"  # Matches opening foreach tags like <<foreach [item in list]>>
+    field_pattern = r"<<\[\w+\]>>"  # Matches fields like <<[FieldName]>>
+    var_pattern = r"<<var \[.*?\]>>"  # Matches variable definitions like <<var [x = 5]>>
+    foreach_open_pattern = r"<<foreach \[.*?\]>>"  # Matches opening foreach tags like <<foreach [item in list]>>
     foreach_close_pattern = r"<</foreach>>"  # Matches closing foreach tags
-    if_open_pattern = r"<<if \\[.*?\\]>>"  # Matches opening if tags like <<if [condition]>>
-    elseif_pattern = r"<<elseif \\[.*?\\]>>"  # Matches elseif tags like <<elseif [condition]>>
+    if_open_pattern = r"<<if \[.*?\]>>"  # Matches opening if tags like <<if [condition]>>
+    elseif_pattern = r"<<elseif \[.*?\]>>"  # Matches elseif tags like <<elseif [condition]>>
     else_pattern = r"<<else>>"  # Matches else tags like <<else>>
     if_close_pattern = r"<</if>>"  # Matches closing if tags
 
@@ -45,17 +45,15 @@ def verify_template_syntax(template, predefined_json):
         elif re.match(elseif_pattern, token) or re.match(else_pattern, token):
             if not stack or stack[-1] != "if":
                 return f"Unexpected tag without matching <if>: {token}"
+        elif re.match(field_pattern, token):
+            # Validate fields against predefined JSON
+            field_name = token.strip("<>").strip("[]")
+            if not validate_field_in_json(field_name, predefined_json):
+                return f"Field '{field_name}' is not defined in the predefined JSON"
 
     # Check if there are any unmatched opening tags left in the stack
     if stack:
         return f"Unmatched opening tag(s): {stack}"
-
-    # Validate fields against predefined JSON
-    fields = re.findall(field_pattern, template)
-    for field in fields:
-        field_name = field.strip("<>").strip("[]")
-        if not validate_field_in_json(field_name, predefined_json):
-            return f"Field '{field_name}' is not defined in the predefined JSON"
 
     return "Template syntax is valid!"
 
@@ -69,7 +67,7 @@ def validate_field_in_json(field, json_data):
                 key = int(key)  # Convert to integer if accessing list index
             except ValueError:
                 return False
-        if key not in current_level:
+        if isinstance(current_level, dict) and key not in current_level:
             return False
         current_level = current_level[key]
     return True
