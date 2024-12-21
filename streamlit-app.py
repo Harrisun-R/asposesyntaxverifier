@@ -63,20 +63,28 @@ def verify_aspose_syntax(template_content, flattened_fields):
     missing_fields = []
 
     # Define regular expressions for Aspose.Words syntax
-    field_pattern = r"<<([a-zA-Z0-9_\.]+)>>"  # Matches <<FieldName>> or <<Parent.FieldName>>
-    if_pattern = r"<<if\s+[^>]+>>.*?(<<elseif\s+[^>]+>>.*?)*<<else>>.*?<</if>>"  # Matches <<if condition>>...<<elseif condition>>...<<else>>...<</if>>
-    foreach_pattern = r"<<foreach\s+[^>]+>>.*?<</foreach>>"  # Matches <<foreach item in collection>>...<</foreach>>
+    field_pattern = r"<<\[([a-zA-Z0-9_\.]+)\]>>"  # Matches <<[FieldName]>> or <<[Parent.FieldName]>>
+    if_pattern = r"<<if\s+[^>]+>>|<<elseif\s+[^>]+>>|<<else>>|<</if>>"  # Matches <<if>>, <<elseif>>, <<else>>, and <</if>>
+    foreach_pattern = r"<<foreach\s+[^>]+>>|<</foreach>>"  # Matches <<foreach>> and <</foreach>>
 
-    # Check for unmatched opening and closing tags
-    unmatched_if = re.findall(r"<<if\s+[^>]+>>", template_content)
-    unmatched_endif = re.findall(r"<</if>>", template_content)
-    unmatched_foreach = re.findall(r"<<foreach\s+[^>]+>>", template_content)
-    unmatched_endforeach = re.findall(r"<</foreach>>", template_content)
+    # Stack-based approach to check for nested structures
+    stack = []
+    for match in re.finditer(f"{if_pattern}|{foreach_pattern}", template_content):
+        tag = match.group()
+        if tag.startswith("<<if") or tag.startswith("<<foreach"):
+            stack.append(tag)
+        elif tag == "<</if>>" or tag == "<</foreach>>":
+            if not stack:
+                errors.append(f"Unmatched closing tag: {tag}")
+            else:
+                opening_tag = stack.pop()
+                if (tag == "<</if>>" and not opening_tag.startswith("<<if")) or \
+                   (tag == "<</foreach>>" and not opening_tag.startswith("<<foreach")):
+                    errors.append(f"Mismatched tags: {opening_tag} and {tag}")
 
-    if len(unmatched_if) != len(unmatched_endif):
-        errors.append("Mismatched <<if>> and <</if>> tags.")
-    if len(unmatched_foreach) != len(unmatched_endforeach):
-        errors.append("Mismatched <<foreach>> and <</foreach>> tags.")
+    # Check for unclosed tags
+    for unclosed_tag in stack:
+        errors.append(f"Unclosed tag: {unclosed_tag}")
 
     # Extract all field placeholders
     fields = re.findall(field_pattern, template_content)
