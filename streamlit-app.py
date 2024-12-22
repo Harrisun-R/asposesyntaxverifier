@@ -2,96 +2,163 @@ import re
 import json
 import streamlit as st
 
-# Define a function to verify the template syntax
-def verify_template_syntax(template, predefined_json):
-    # Define regex patterns for the supported syntax
-    field_pattern = r"<<\[\w+\]>>"  # Matches fields like <<[FieldName]>>
-    var_pattern = r"<<var \[.*?\]>>"  # Matches variable definitions like <<var [x = 5]>>
-    foreach_open_pattern = r"<<foreach \[.*?\]>>"  # Matches opening foreach tags like <<foreach [item in list]>>
+# Define a function to verify the template syntax and execute it
+def verify_and_execute_template(template, predefined_json):
+    field_pattern = r"<<\[(\w+(\.\w+)*)\]>>"  # Matches fields like <<[FieldName]>>
+    var_pattern = r"<<var \[(.*?)]>>"  # Matches variable definitions like <<var [x = 5]>>
+    foreach_open_pattern = r"<<foreach \[(.*?) in (.*?)]>>"  # Matches opening foreach tags
     foreach_close_pattern = r"<</foreach>>"  # Matches closing foreach tags
-    if_open_pattern = r"<<if \[.*?\]>>"  # Matches opening if tags like <<if [condition]>>
-    elseif_pattern = r"<<elseif \[.*?\]>>"  # Matches elseif tags like <<elseif [condition]>>
-    else_pattern = r"<<else>>"  # Matches else tags like <<else>>
+    if_open_pattern = r"<<if \[(.*?)]>>"  # Matches opening if tags
+    elseif_pattern = r"<<elseif \[(.*?)]>>"  # Matches elseif tags
+    else_pattern = r"<<else>>"  # Matches else tags
     if_close_pattern = r"<</if>>"  # Matches closing if tags
 
-    # Combine all tag patterns for detection
-    all_tags_pattern = (
-        f"({field_pattern}|{var_pattern}|{foreach_open_pattern}|{foreach_close_pattern}|"
-        f"{if_open_pattern}|{elseif_pattern}|{else_pattern}|{if_close_pattern})"
-    )
+    result = []  # To store the final output
 
-    # Tokenize the template based on the tags
-    tokens = re.findall(all_tags_pattern, template)
-
-    # Stack to track opening tags
+    # Tokenize and parse the template line-by-line
+    lines = template.splitlines()
     stack = []
 
-    # Iterate through the tokens to validate the syntax
-    for token in tokens:
-        if re.match(foreach_open_pattern, token):
-            stack.append("foreach")
-        elif re.match(if_open_pattern, token):
-            stack.append("if")
-        elif re.match(var_pattern, token):
-            continue  # Variables don't affect nesting, so skip
-        elif re.match(foreach_close_pattern, token):
-            if not stack or stack[-1] != "foreach":
-                return f"Unmatched closing tag: {token}"
-            stack.pop()
-        elif re.match(if_close_pattern, token):
-            if not stack or stack[-1] != "if":
-                return f"Unmatched closing tag: {token}"
-            stack.pop()
-        elif re.match(elseif_pattern, token) or re.match(else_pattern, token):
-            if not stack or stack[-1] != "if":
-                return f"Unexpected tag without matching <if>: {token}"
-        elif re.match(field_pattern, token):
-            # Validate fields against predefined JSON
-            field_name = token.strip("<>").strip("[]")
-            if not validate_field_in_json(field_name, predefined_json):
-                return f"Field '{field_name}' is not defined in the predefined JSON"
+    def resolve_field(field_name):
+        """Resolve a field from JSON using dot notation."""
+        keys = field_name.split(".")
+        current_level = predefined_json
+        for key in keys:
+            if isinstance(current_level, list):
+                try:
+                    key = int(key)  # Convert to integer if accessing list index
+                except ValueError:
+                    return f"Error: List index '{key}' is invalid."
+            if isinstance(current_level, dict) and key not in current_level:
+                return f"Error: Field '{field_name}' not found in JSON."
+            current_level = current_level[key]
+        return current_level
 
-    # Check if there are any unmatched opening tags left in the stack
-    if stack:
-        return f"Unmatched opening tag(s): {stack}"
+    for line in lines:
+        # Handle foreach opening tag
+        foreach_match = re.match(foreach_open_pattern, line)
+        if foreach_match:
+            var_name, list_name = foreach_match.groups()
+            list_data = resolve_field(list_name)
+            if isinstance(list_data, list):
+                stack.append(("foreach", var_name, iter(list_data)))
+            else:
+                return f"Error: '{list_name}' is not a list."
+            continue
 
-    return "Template syntax is valid!"
+        # Handle foreach closing tag
+        if re.match(foreach_close_pattern, line):
+            if stack and stack[-1][0] == "foreach":
+                stack.pop()
+            else:
+                return "Error: Unmatched <</foreach>>."
+            continue
 
-# Helper function to validate if a field exists in the predefined JSON
-def validate_field_in_json(field, json_data):
-    keys = field.split(".")
-    current_level = json_data
-    for key in keys:
-        if isinstance(current_level, list):
+        # Handle if opening tag
+        if_match = re.match(if_open_pattern, line)
+        if if_match:
+            condition = if_match.group(1)
             try:
-                key = int(key)  # Convert to integer if accessing list index
-            except ValueError:
-                return False
-        if isinstance(current_level, dict) and key not in current_level:
-            return False
-        current_level = current_level[key]
-    return True
+                condition_result = eval(condition, {}, predefined_json)
+                stack.append(("if", condition_result))
+            except Exception as e:
+                return f"Error evaluating condition '{condition}': {e}"
+            continue
+
+        # Handle elseif tag
+        elseif_match = re.match(elseif_pattern, line)
+        if elseif_match:
+            condition = elseif_match.group(1)
+            if stack and stack[-1][0] == "if" and not stack[-1][1]:
+                try:
+                    condition_result = eval(condition, {}, predefined_json)
+                    stack[-1] = ("if", condition_result)
+                except Exception as e:
+                    return f"Error evaluating condition '{condition}': {e}"
+            continue
+
+        # Handle else tag
+        if re.match(else_pattern, line):
+            if stack and stack[-1][0] == "if" and not stack[-1][1]:
+                stack[-1] = ("if", True)  # Else branch is executed
+            continue
+
+        # Handle if closing tag
+        if re.match(if_close_pattern, line):
+            if stack and stack[-1][0] == "if":
+                stack.pop()
+            else:
+                return "Error: Unmatched <</if>>."
+            continue
+
+        # Handle fields
+        field_match = re.findall(field_pattern, line)
+        if field_match:
+            for field_name in field_match:
+                field_value = resolve_field(field_name[0])
+                if isinstance(field_value, str) or isinstance(field_value, (int, float)):
+                    line = line.replace(f"<<[{field_name[0]}]>>", str(field_value))
+                else:
+                    return f"Error: Field '{field_name[0]}' is not a valid string or number."
+            result.append(line)
+
+        # Handle other lines
+        else:
+            result.append(line)
+
+    # Check for unmatched tags
+    if stack:
+        return "Error: Unmatched opening tags."
+
+    return "\n".join(result)
 
 # Streamlit app
-st.title("Template Syntax Verifier")
+st.title("Template Syntax Verifier and Executor")
 
-# Upload predefined JSON
-predefined_json = None
-uploaded_file = st.file_uploader("Upload Predefined JSON", type=["json"])
-if uploaded_file is not None:
-    predefined_json = json.load(uploaded_file)
-    st.success("Predefined JSON uploaded successfully!")
+# Navigation to switch between pages
+page = st.sidebar.selectbox("Choose a page", ["Verify Template", "Execute Template"])
 
-# Text area to input the template
-template = st.text_area("Enter the template:")
+if page == "Verify Template":
+    # Upload predefined JSON
+    predefined_json = None
+    uploaded_file = st.file_uploader("Upload Predefined JSON", type=["json"])
+    if uploaded_file is not None:
+        predefined_json = json.load(uploaded_file)
+        st.success("Predefined JSON uploaded successfully!")
 
-# Verify button
-if st.button("Verify Syntax"):
-    if predefined_json is None:
-        st.error("Please upload a predefined JSON file first.")
-    else:
-        result = verify_template_syntax(template, predefined_json)
-        if "valid" in result:
-            st.success(result)
+    # Text area to input the template
+    template = st.text_area("Enter the template:")
+
+    # Verify button
+    if st.button("Verify Syntax"):
+        if predefined_json is None:
+            st.error("Please upload a predefined JSON file first.")
         else:
-            st.error(result)
+            result = verify_and_execute_template(template, predefined_json)
+            if "Error" in result:
+                st.error(result)
+            else:
+                st.success("Template syntax is valid!")
+
+elif page == "Execute Template":
+    # Upload predefined JSON
+    predefined_json = None
+    uploaded_file = st.file_uploader("Upload Predefined JSON", type=["json"])
+    if uploaded_file is not None:
+        predefined_json = json.load(uploaded_file)
+        st.success("Predefined JSON uploaded successfully!")
+
+    # Text area to input the template
+    template = st.text_area("Enter the template:")
+
+    # Execute button
+    if st.button("Execute Template"):
+        if predefined_json is None:
+            st.error("Please upload a predefined JSON file first.")
+        else:
+            result = verify_and_execute_template(template, predefined_json)
+            if "Error" in result:
+                st.error(result)
+            else:
+                st.subheader("Execution Result:")
+                st.code(result)
